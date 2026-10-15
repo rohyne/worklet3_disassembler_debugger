@@ -1,35 +1,35 @@
 ﻿# Worklet 3: Disassembler & Step Debugger
 
-## Overview
+## What's this?
 
-The Disassembler & Step Debugger is a component of the Mini Project 15 that aims to help users understand and debug program execution at a lower level.
+This is our part of Mini Project 15. The goal is to make it easier to see what a program is actually doing under the hood.
 
-The worklet focuses on analyzing machine instructions, displaying their corresponding assembly representations, and providing step-by-step execution insights to help users understand how a program behaves internally.
+We take machine instructions, turn them back into readable assembly, and let you step through a program one instruction at a time to watch how it behaves.
 
-## Objectives
+## What we're aiming for
 
-- Develop a disassembler to represent machine instructions in a human-readable assembly format.
-- Implement step-by-step debugging to observe program execution.
-- Display instruction-level information to help users understand program flow.
-- Identify and analyze instruction execution and control flow.
-- Integrate the worklet with the overall project architecture.
+- Build a disassembler that shows machine instructions as readable assembly
+- Add a step debugger so you can watch a program run bit by bit
+- Show instruction-level info so the program flow actually makes sense
+- Dig into how instructions execute and how control flow works
+- Plug it all into the rest of the project
 
-## Planned Features
+## Planned features
 
-- Instruction Disassembly:** Convert machine code into readable assembly instructions.
-- Step-by-Step Debugging:** Allow users to examine program execution one instruction at a time.
-- Instruction Display:** Present addresses, opcodes, and decoded instructions.
-- Execution Tracking:** Track the current instruction and program execution flow.
-- Error Handling:** Handle invalid input and unsupported instructions gracefully.
+- **Instruction disassembly:** machine code in, readable assembly out
+- **Step-by-step debugging:** run one instruction at a time and see what happens
+- **Instruction display:** addresses, opcodes, and the decoded instruction side by side
+- **Execution tracking:** always know which instruction you're on and where the program is heading
+- **Error handling:** bad input or unsupported instructions shouldn't crash anything
 
-## Technology Stack
+## Tech stack
 
-- Programming Language:** C/C++
-- Development Environment:** Visual Studio Code / Visual Studio
-- Version Control:** Git and GitHub
-- Target Platform:** Windows
+- **Language:** C/C++
+- **Editor/IDE:** Visual Studio Code or Visual Studio
+- **Version control:** Git and GitHub
+- **Target platform:** Windows
 
-## Project Structure
+## Project structure
 
 ```text
 Worklet-3/
@@ -44,35 +44,19 @@ Worklet-3/
     └── (documentation)
 ```
 
-The directory structure may evolve as implementation progresses.
+This will probably change as we build things out.
 
-## Implementation Plan
+## The plan
 
-1. Study the overall Mini Project 15 architecture and define the worklet's interfaces.
-2. Identify the instruction format and target architecture to be supported.
-3. Design the disassembly module.
-4. Implement instruction decoding and formatted assembly output.
-5. Design and implement the step debugger.
-6. Test the modules using sample programs and instruction sequences.
-7. Integrate the worklet with the overall project.
-8. Document the implementation, limitations, and test results.
+1. Get familiar with the overall Mini Project 15 architecture and nail down our interfaces
+2. Decide which instruction format and architecture we're supporting
+3. Design the disassembly module
+4. Build the instruction decoding and formatted assembly output
+5. Design and build the step debugger
+6. Test everything with sample programs and instruction sequences
+7. Integrate with the rest of the project
+8. Write up the implementation, limitations, and test results
 
-## Current Status
+## What we're hoping to end up with
 
-Status: Planning and initial setup.
-
-The repository has been created, and the implementation approach and module structure are being planned. Development and testing are yet to begin.
-
-## Expected Outcome
-
-A functional disassembler and step debugger that provides readable instruction-level information and supports step-by-step analysis of program execution, integrated with the overall Mini Project 15.
-
-## Team and Contribution
-
-This repository contains the implementation and documentation for Worklet 3 of Mini Project 15: Disassembler & Step Debugger.
-
-Individual contributions and integration details will be updated as development progresses.
-
-## License
-
-This project is developed for academic purposes as part of Mini Project.
+A working disassembler and step debugger that gives readable instruction-level info and lets you step through a program, all integrated with the rest of Mini Project 15.
