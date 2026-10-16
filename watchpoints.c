@@ -2,107 +2,184 @@
 #include "watchpoint.h"
 
 #include <stdio.h>
+#include <inttypes.h>
 #include <string.h>
 
-// Stores all active watchpoints.
+/* Stores all watchpoints. */
 static Watchpoint watchpoints[MAX_WATCHPOINTS];
+static WatchReadMemory read_memory;
 
-// Callback used to read memory through the debugger.
-static WatchReadMemory memory_reader = NULL;
-
-// Initializes the watchpoint table.
-void watchpoint_init(WatchReadMemory read_memory)
+/* Convert watched bytes into a value. */
+static int read_value(uint64_t address, size_t size,
+                      uint64_t *value)
 {
-    memset(watchpoints, 0, sizeof(watchpoints));
-    memory_reader = read_memory;
+    unsigned char bytes[8] = {0};
+    size_t i;
+
+    if (read_memory == NULL || value == NULL ||
+        size == 0 || size > sizeof(bytes)) {
+        return -1;
+    }
+
+    if (read_memory(address, bytes, size) != 0) {
+        return -1;
+    }
+
+    *value = 0;
+
+    for (i = 0; i < size; i++) {
+        *value |= (uint64_t)bytes[i] << (i * 8);
+    }
+
+    return 0;
 }
 
-// Adds a watchpoint and saves its initial memory value.
+/* Initialize all watchpoint slots. */
+void watchpoint_init(WatchReadMemory reader)
+{
+    read_memory = reader;
+    memset(watchpoints, 0, sizeof(watchpoints));
+}
+
+/* Add a watchpoint and save its initial value. */
 int watchpoint_add(uint64_t address, size_t size)
 {
-    size_t i;
-    uint64_t value = 0;
+    uint64_t value;
+    int i;
 
-    if (memory_reader == NULL || size == 0 ||
-        size > sizeof(value)) {
+    if (read_memory == NULL || size == 0 || size > 8 ||
+        address > UINT64_MAX - (size - 1)) {
         return -1;
     }
-
-    // Read the value before monitoring begins.
-    if (memory_reader(address, &value, size) != 0) {
-        return -1;
-    }
-
-    // Find an unused slot.
-    for (i = 0; i < MAX_WATCHPOINTS; i++) {
-        if (!watchpoints[i].enabled) {
-            watchpoints[i].address = address;
-            watchpoints[i].value = value;
-            watchpoints[i].size = size;
-            watchpoints[i].enabled = true;
-
-            return 0;
-        }
-    }
-
-    return -1;
-}
-
-// Disables the watchpoint at the specified address.
-int watchpoint_remove(uint64_t address)
-{
-    size_t i;
 
     for (i = 0; i < MAX_WATCHPOINTS; i++) {
         if (watchpoints[i].enabled &&
             watchpoints[i].address == address) {
-            watchpoints[i].enabled = false;
+            printf("Watchpoint already exists.\n");
+            return -1;
+        }
+    }
+
+    for (i = 0; i < MAX_WATCHPOINTS; i++) {
+        if (!watchpoints[i].enabled) {
+            if (read_value(address, size, &value) != 0) {
+                printf("Could not read watched memory.\n");
+                return -1;
+            }
+
+            watchpoints[i].address = address;
+            watchpoints[i].size = size;
+            watchpoints[i].value = value;
+            watchpoints[i].enabled = 1;
+
+            printf("Watchpoint %d set at 0x%" PRIx64
+                   " (%zu bytes), value = 0x%" PRIx64 "\n",
+                   i + 1, address, size, value);
+
+            return i + 1;
+        }
+    }
+
+    printf("Maximum watchpoints reached.\n");
+    return -1;
+}
+
+/* Remove a watchpoint by address. */
+int watchpoint_remove(uint64_t address)
+{
+    int i;
+
+    for (i = 0; i < MAX_WATCHPOINTS; i++) {
+        if (watchpoints[i].enabled &&
+            watchpoints[i].address == address) {
+            watchpoints[i].enabled = 0;
+            printf("Watchpoint %d removed.\n", i + 1);
             return 0;
         }
     }
 
+    printf("Watchpoint not found.\n");
     return -1;
 }
 
-// Compares current memory values with their saved values.
-int watchpoint_check(void)
+/* Remove a watchpoint by ID. */
+int watchpoint_remove_id(int id)
 {
-    size_t i;
-
-    if (memory_reader == NULL)
+    if (id < 1 || id > MAX_WATCHPOINTS ||
+        !watchpoints[id - 1].enabled) {
+        printf("Watchpoint ID not found.\n");
         return -1;
+    }
+
+    watchpoints[id - 1].enabled = 0;
+    printf("Watchpoint %d removed.\n", id);
+    return 0;
+}
+
+/* Check watched memory after an instruction. */
+int watchpoint_check(uint64_t writer_pc)
+{
+    uint64_t current_value;
+    int i;
+    int hits = 0;
+
+    if (read_memory == NULL) {
+        return -1;
+    }
 
     for (i = 0; i < MAX_WATCHPOINTS; i++) {
-        uint64_t current = 0;
-
-        if (!watchpoints[i].enabled)
+        if (!watchpoints[i].enabled) {
             continue;
-
-        // Read the latest value from the monitored address.
-        if (memory_reader(
-                watchpoints[i].address,
-                &current,
-                watchpoints[i].size) != 0) {
-            return -1;
         }
 
-        // Report a hit if the memory value has changed.
-        if (current != watchpoints[i].value) {
-            printf("Watchpoint hit at address 0x%llx\n",
-                   (unsigned long long)watchpoints[i].address);
+        if (read_value(watchpoints[i].address,
+                       watchpoints[i].size,
+                       &current_value) != 0) {
+            printf("Could not read watchpoint %d.\n", i + 1);
+            continue;
+        }
 
-            printf("Old value: 0x%llx\n",
-                   (unsigned long long)watchpoints[i].value);
+        if (current_value != watchpoints[i].value) {
+            printf("\n[Watchpoint %d] Memory changed\n", i + 1);
+            printf("Address: 0x%08" PRIx64 "\n",
+                   watchpoints[i].address);
+            printf("Old value: 0x%08" PRIx64 "\n",
+                   watchpoints[i].value);
+            printf("New value: 0x%08" PRIx64 "\n",
+                   current_value);
+            printf("Written by: 0x%08" PRIx64 "\n",
+                   writer_pc);
 
-            printf("New value: 0x%llx\n",
-                   (unsigned long long)current);
-
-            // Save the latest value for subsequent checks.
-            watchpoints[i].value = current;
-
-            return 1;
+            watchpoints[i].value = current_value;
+            hits++;
         }
     }
 
-    return 0;
+    return hits > 0 ? 1 : 0;
+}
+
+/* Display active watchpoints. */
+void watchpoint_list(void)
+{
+    int i;
+    int found = 0;
+
+    for (i = 0; i < MAX_WATCHPOINTS; i++) {
+        if (!watchpoints[i].enabled) {
+            continue;
+        }
+
+        printf("ID: %d, Address: 0x%08" PRIx64
+               ", Size: %zu, Value: 0x%08" PRIx64 "\n",
+               i + 1,
+               watchpoints[i].address,
+               watchpoints[i].size,
+               watchpoints[i].value);
+
+        found = 1;
+    }
+
+    if (!found) {
+        printf("No active watchpoints.\n");
+    }
 }

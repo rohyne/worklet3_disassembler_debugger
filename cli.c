@@ -1,222 +1,411 @@
-#include "cli.h"
 
-#include <ctype.h>
+#include "cli.h"
+#include "watchpoint.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
 
-#define CLI_INPUT_SIZE 256
-
-// Stores the debugger functions provided by the main progam
 static CliOps cli_ops;
-static bool cli_initialized = false;
-static bool cli_running = true;
+static const SymTable *cli_symtab;
 
-// Removes whitespace
-static void trim(char *str)
-{
-    char *start = str;
-    char *end;
-
-    while (isspace((unsigned char)*start))
-        start++;
-
-    if (start != str)
-        memmove(str, start, strlen(start) + 1);
-
-    end = str + strlen(str);
-
-    while (end > str && isspace((unsigned char)*(end - 1)))
-        end--;
-
-    *end = '\0';
-}
-
-// Converts a hexadecimal or decimal address into an integer
+/* Convert an address or symbol into an address. */
 static int parse_address(const char *str, uint64_t *address)
 {
     char *end;
     unsigned long long value;
+    int base;
 
-    if (str == NULL || *str == '\0' || *str == '-')
+    if (str == NULL || address == NULL || *str == '\0' ||
+        *str == '-') {
         return 0;
+    }
 
-    value = strtoull(str, &end, 0);
+    if (cli_symtab != NULL) {
+        unsigned int sym_addr;
 
-    if (end == str || *end != '\0')
+        if (symtab_lookup_name(cli_symtab, str, &sym_addr)) {
+            *address = sym_addr;
+            return 1;
+        }
+    }
+
+    base = (str[0] == '0' &&
+            (str[1] == 'x' || str[1] == 'X')) ? 16 : 10;
+
+    errno = 0;
+    value = strtoull(str, &end, base);
+
+    if (errno == ERANGE || end == str || *end != '\0') {
         return 0;
+    }
 
     *address = (uint64_t)value;
     return 1;
 }
 
-// Validates an address and forwards it to the debugger core
-static bool dispatch_address_command(
-    const char *argument,
-    int (*callback)(uint64_t),
-    const char *name)
+/* Split a command into arguments. */
+static int tokenize(char *str, char *argv[], int max_args)
 {
-    uint64_t address;
+    int count = 0;
+    char *p = str;
 
-    if (argument == NULL || !parse_address(argument, &address)) {
-        printf("Usage: %s <address>\n", name);
-        return false;
-    }
+    while (*p) {
+        while (isspace((unsigned char)*p)) {
+            p++;
+        }
 
-    if (callback == NULL || callback(address) != 0) {
-        printf("Failed to execute %s.\n", name);
-        return false;
-    }
+        if (*p == '\0') {
+            break;
+        }
 
-    printf("%s set at 0x%llx\n",
-           name, (unsigned long long)address);
+        if (count == max_args) {
+            return -1;
+        }
 
-    return true;
-}
+        argv[count++] = p;
 
-// Connects the CLI to the debugger core
-void cli_init(const CliOps *ops)
-{
-    if (ops == NULL) {
-        cli_initialized = false;
-        return;
-    }
+        while (*p && !isspace((unsigned char)*p)) {
+            p++;
+        }
 
-    cli_ops = *ops;
-    cli_initialized = true;
-    cli_running = true;
-}
-
-// Interprets and executes a user-entered command
-bool cli_execute(const char *input)
-{
-    char buffer[CLI_INPUT_SIZE];
-    char *command;
-    char *argument;
-
-    if (input == NULL)
-        return false;
-
-    if (strlen(input) >= sizeof(buffer)) {
-        printf("Command is too long.\n");
-        return true;
-    }
-
-    strcpy(buffer, input);
-    trim(buffer);
-
-    if (buffer[0] == '\0')
-        return true;
-
-    command = strtok(buffer, " \t");
-    argument = strtok(NULL, " \t");
-
-    // Displays available commands.
-    if (strcmp(command, "help") == 0) {
-        if (argument != NULL)
-            printf("Usage: help\n");
-        else if (cli_ops.show_help != NULL)
-            cli_ops.show_help();
-        else
-            printf("Commands: help, break, watch, run, step, "
-                   "continue, registers, quit\n");
-    }
-    // Sets a breakpoint at the specified address.
-    else if (strcmp(command, "break") == 0) {
-        dispatch_address_command(
-            argument, cli_ops.set_breakpoint, "break");
-    }
-    // Requests a watchpoint at the specified address.
-    else if (strcmp(command, "watch") == 0) {
-        dispatch_address_command(
-            argument, cli_ops.set_watchpoint, "watch");
-    }
-    // Starts program execution.
-    else if (strcmp(command, "run") == 0) {
-        if (argument != NULL)
-            printf("Usage: run\n");
-        else if (cli_ops.run != NULL)
-            cli_ops.run();
-        else
-            printf("Run command is not connected.\n");
-    }
-    // Executes one instruction.
-    else if (strcmp(command, "step") == 0) {
-        if (argument != NULL)
-            printf("Usage: step\n");
-        else if (cli_ops.step != NULL)
-            cli_ops.step();
-        else
-            printf("Step command is not connected.\n");
-    }
-    // Resumes execution after a pause.
-    else if (strcmp(command, "continue") == 0) {
-        if (argument != NULL)
-            printf("Usage: continue\n");
-        else if (cli_ops.continue_execution != NULL)
-            cli_ops.continue_execution();
-        else
-            printf("Continue command is not connected.\n");
-    }
-    // Displays the current register values.
-    else if (strcmp(command, "registers") == 0) {
-        if (argument != NULL)
-            printf("Usage: registers\n");
-        else if (cli_ops.show_registers != NULL)
-            cli_ops.show_registers();
-        else
-            printf("Register display is not connected.\n");
-    }
-    // Exits the debugger.
-    else if (strcmp(command, "quit") == 0) {
-        if (argument != NULL) {
-            printf("Usage: quit\n");
-        } else {
-            cli_running = false;
-
-            if (cli_ops.shutdown != NULL)
-                cli_ops.shutdown();
+        if (*p) {
+            *p++ = '\0';
         }
     }
-    // Handles unrecognized commands.
-    else {
-        printf("Unknown command: %s\n", command);
-        printf("Type 'help' for available commands.\n");
-    }
 
-    return cli_running;
+    return count;
 }
 
-// Repeatedly reads and executes commands.
-void cli_run(void)
+/* Print available commands. */
+static void print_help(void)
 {
-    char input[CLI_INPUT_SIZE];
+    printf("Commands:\n");
+    printf("  help\n");
+    printf("  break <address|symbol>\n");
+    printf("  watch <address|symbol>\n");
+    printf("  delete <watchpoint_id>\n");
+    printf("  info breakpoints\n");
+    printf("  info watchpoints\n");
+    printf("  run\n");
+    printf("  step [count]\n");
+    printf("  continue\n");
+    printf("  print regs\n");
+    printf("  print flags\n");
+    printf("  print mem <address|symbol> [length]\n");
+    printf("  print asm\n");
+    printf("  print <register>\n");
+    printf("  quit\n");
+}
 
-    if (!cli_initialized) {
-        printf("CLI is not initialized.\n");
-        return;
+/* Initialize the CLI. */
+void cli_init(const CliOps *ops, const SymTable *symtab)
+{
+    if (ops != NULL) {
+        cli_ops = *ops;
+    } else {
+        memset(&cli_ops, 0, sizeof(cli_ops));
     }
 
-    cli_running = true;
+    cli_symtab = symtab;
+}
 
-    while (cli_running) {
-        printf("debugger> ");
+/* Execute one command. */
+int cli_execute(const char *command)
+{
+    char buffer[256];
+    char *argv[5];
+    int argc;
+    uint64_t address;
+
+    if (command == NULL || strlen(command) >= sizeof(buffer)) {
+        printf("Invalid command.\n");
+        return -1;
+    }
+
+    strcpy(buffer, command);
+    argc = tokenize(buffer, argv, 5);
+
+    if (argc < 0) {
+        printf("Too many arguments.\n");
+        return -1;
+    }
+
+    if (argc == 0) {
+        return 0;
+    }
+
+    if (strcmp(argv[0], "help") == 0) {
+        if (argc != 1) {
+            printf("Usage: help\n");
+            return -1;
+        }
+
+        if (cli_ops.show_help) {
+            cli_ops.show_help();
+        } else {
+            print_help();
+        }
+    }
+
+    else if (strcmp(argv[0], "break") == 0 ||
+             strcmp(argv[0], "watch") == 0) {
+        int is_break = strcmp(argv[0], "break") == 0;
+
+        if (argc != 2 || !parse_address(argv[1], &address)) {
+            printf("Usage: %s <address|symbol>\n", argv[0]);
+            return -1;
+        }
+
+        if (is_break) {
+            if (cli_ops.set_breakpoint) {
+                return cli_ops.set_breakpoint(address) < 0 ? -1 : 0;
+            }
+        } else {
+            if (cli_ops.set_watchpoint) {
+                return cli_ops.set_watchpoint(address) < 0 ? -1 : 0;
+            }
+        }
+
+        printf("Command is not connected.\n");
+        return -1;
+    }
+
+    else if (strcmp(argv[0], "delete") == 0) {
+        char *end;
+        long id;
+
+        if (argc != 2 || *argv[1] == '-') {
+            printf("Usage: delete <watchpoint_id>\n");
+            return -1;
+        }
+
+        errno = 0;
+        id = strtol(argv[1], &end, 10);
+
+        if (errno == ERANGE || end == argv[1] ||
+            *end != '\0' || id < 1 || id > MAX_WATCHPOINTS) {
+            printf("Invalid watchpoint ID.\n");
+            return -1;
+        }
+
+        return watchpoint_remove_id((int)id);
+    }
+
+    else if (strcmp(argv[0], "info") == 0) {
+        if (argc != 2) {
+            printf("Usage: info <breakpoints|watchpoints>\n");
+            return -1;
+        }
+
+        if (strcmp(argv[1], "watchpoints") == 0) {
+            watchpoint_list();
+        } else if (strcmp(argv[1], "breakpoints") == 0) {
+            if (cli_ops.list_breakpoints) {
+                cli_ops.list_breakpoints();
+            } else {
+                printf("Breakpoint listing is not connected.\n");
+                return -1;
+            }
+        } else {
+            printf("Unknown info command.\n");
+            return -1;
+        }
+    }
+
+    else if (strcmp(argv[0], "run") == 0 ||
+             strcmp(argv[0], "continue") == 0) {
+        int result;
+
+        if (argc != 1) {
+            printf("Unexpected arguments.\n");
+            return -1;
+        }
+
+        if (strcmp(argv[0], "run") == 0) {
+            if (!cli_ops.run) {
+                printf("Run is not connected.\n");
+                return -1;
+            }
+            result = cli_ops.run();
+        } else {
+            if (!cli_ops.continue_execution) {
+                printf("Continue is not connected.\n");
+                return -1;
+            }
+            result = cli_ops.continue_execution();
+        }
+
+        return result;
+    }
+
+    else if (strcmp(argv[0], "step") == 0) {
+        long count = 1;
+        long i;
+        char *end;
+
+        if (argc > 2) {
+            printf("Usage: step [count]\n");
+            return -1;
+        }
+
+        if (argc == 2) {
+            if (*argv[1] == '-') {
+                printf("Invalid step count.\n");
+                return -1;
+            }
+
+            errno = 0;
+            count = strtol(argv[1], &end, 10);
+
+            if (errno == ERANGE || end == argv[1] ||
+                *end != '\0' || count < 1 || count > 100000) {
+                printf("Invalid step count.\n");
+                return -1;
+            }
+        }
+
+        if (!cli_ops.step) {
+            printf("Step is not connected.\n");
+            return -1;
+        }
+
+        for (i = 0; i < count; i++) {
+            int result = cli_ops.step();
+
+            if (result != 0) {
+                return result;
+            }
+        }
+    }
+
+    else if (strcmp(argv[0], "print") == 0) {
+        if (argc == 2 && strcmp(argv[1], "regs") == 0) {
+            if (cli_ops.show_registers) {
+                cli_ops.show_registers();
+            } else {
+                printf("Register display is not connected.\n");
+                return -1;
+            }
+        }
+
+        else if (argc == 2 && strcmp(argv[1], "flags") == 0) {
+            if (cli_ops.show_flags) {
+                cli_ops.show_flags();
+            } else {
+                printf("Flag display is not connected.\n");
+                return -1;
+            }
+        }
+
+        else if (argc == 2 && strcmp(argv[1], "asm") == 0) {
+            if (cli_ops.show_asm) {
+                cli_ops.show_asm();
+            } else {
+                printf("Assembly display is not connected.\n");
+                return -1;
+            }
+        }
+
+        else if ((argc == 3 || argc == 4) &&
+                 strcmp(argv[1], "mem") == 0) {
+            char *end;
+            unsigned long length = 4;
+
+            if (!parse_address(argv[2], &address)) {
+                printf("Invalid memory address.\n");
+                return -1;
+            }
+
+            if (argc == 4) {
+                if (*argv[3] == '-') {
+                    printf("Invalid memory length.\n");
+                    return -1;
+                }
+
+                errno = 0;
+                length = strtoul(argv[3], &end, 10);
+
+                if (errno == ERANGE || end == argv[3] ||
+                    *end != '\0' || length < 1 || length > 256) {
+                    printf("Invalid memory length.\n");
+                    return -1;
+                }
+            }
+
+            if (!cli_ops.show_memory) {
+                printf("Memory display is not connected.\n");
+                return -1;
+            }
+
+            cli_ops.show_memory(address, (size_t)length);
+        }
+
+        else if (argc == 2) {
+            if (cli_ops.show_register) {
+                cli_ops.show_register(argv[1]);
+            } else {
+                printf("Single-register display is not connected.\n");
+                return -1;
+            }
+        }
+
+        else {
+            printf("Invalid print command.\n");
+            return -1;
+        }
+    }
+
+    else if (strcmp(argv[0], "quit") == 0) {
+        if (argc != 1) {
+            printf("Usage: quit\n");
+            return -1;
+        }
+
+        if (cli_ops.shutdown) {
+            cli_ops.shutdown();
+        }
+
+        return 1;
+    }
+
+    else {
+        printf("Unknown command. Type 'help' for commands.\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Read commands until the user quits. */
+void cli_run(void)
+{
+    char command[256];
+
+    while (1) {
+        printf("(dbg) ");
         fflush(stdout);
 
-        if (fgets(input, sizeof(input), stdin) == NULL)
+        if (fgets(command, sizeof(command), stdin) == NULL) {
             break;
+        }
 
-        // Rejects input that exceeds the buffer.
-        if (strchr(input, '\n') == NULL && !feof(stdin)) {
+        if (strchr(command, '\n') == NULL && !feof(stdin)) {
             int ch;
 
-            while ((ch = getchar()) != '\n' && ch != EOF)
-                ;
+            while ((ch = getchar()) != '\n' && ch != EOF) {
+                /* Discard the rest of the line. */
+            }
 
             printf("Command is too long.\n");
             continue;
         }
 
-        cli_execute(input);
+        if (cli_execute(command) == 1) {
+            break;
+        }
     }
 }
